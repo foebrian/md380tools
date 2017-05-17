@@ -16,10 +16,20 @@
 #include "console.h"
 #include "netmon.h"
 #include "debug.h"
+#include "lastheard.h"
+#include "etsi.h"         // 2017-02-18 added for talker alias usage
+#include "irq_handlers.h"
+#include "app_menu.h"     // optional 'application' menu, temporarily disables some gfx-funcs
 
-//Needed for LED functions.  Cut dependency.
+// Needed for LED functions.  Cut dependency.
 #include "stm32f4_discovery.h"
 #include "stm32f4xx_conf.h" // again, added because ST didn't put it here ?
+
+
+uint8_t GFX_backlight_on=0; // DL4YHF 2017-01-07 : 0="off" (low intensity), 1="on" (high intensity)
+                            //   (note: GFX_backlight_on is useless as long as no-one calls lcd_background_led() .
+                            //    As long as that's the case, the 'dimmed backlight switcher' 
+                            //    in applet/src/irq_handlers.c polls backlight_timer instead of GFX_backlight_on . )
 
 //! Draws text at an address by calling back to the MD380 function.
 
@@ -82,12 +92,23 @@ void red_led(int on) {
   }
 }
 
-void lcd_background_led(int on) {
-  if (on) {
-    GPIO_SetBits(GPIOC, GPIO_Pin_6);
-  } else {
-    GPIO_ResetBits(GPIOC, GPIO_Pin_6);
-  }
+void lcd_background_led(int on) 
+{ // 2017-01-07 : Never called / no effect ? The backlight seems to be controlled "by Tytera only" (backlight_timer).
+
+#if( CONFIG_DIMMED_LIGHT ) 
+  GFX_backlight_on = on; // DL4YHF 2017-01-07.  Tried to poll this in irq_handlers.c, but didn't work.
+                         // Poll Tytera's 'backlight_timer' instead. Nonzero="bright", zero="dark" . 
+                         // With CONFIG_DIMMED_LIGHT=1, the "Lamp" output (PC6) is usually configured 
+                         // as UART6_TX, and switching it 'as GPIO' has no effect then.                         
+#else // ! CONFIG_DIMMED_LIGHT : only completely on or off ...
+ 
+  if (on) 
+   { GPIO_SetBits(GPIOC, GPIO_Pin_6);
+   } 
+  else 
+   { GPIO_ResetBits(GPIOC, GPIO_Pin_6);
+   }
+#endif // CONFIG_DIMMED_LIGHT ?   
 }
 
 /*
@@ -108,6 +129,12 @@ void dump_ram_to_spi_flash() {
  */
 void print_date_hook(void)
 { // copy from the md380 code
+
+# if (CONFIG_APP_MENU)
+   if( Menu_IsVisible() ) // 'app menu' visible ? Don't allow Tytera to print into the framebuffer !
+    { return; 
+    }
+# endif
 
     if( is_netmon_visible() ) {
         return;
@@ -173,8 +200,11 @@ void print_date_hook(void)
 #endif //CONFIG_GRAPHICS
 }
 
-void print_time_hook(void)
+void print_time_hook(const char log)
 {
+    if( is_netmon_visible() ) {
+        return;
+    }
     wchar_t wide_time[9];
 
     RTC_TimeTypeDef RTC_TimeStruct;
@@ -190,19 +220,35 @@ void print_time_hook(void)
     for (int i = 0; i < 9; i++) {
         if( wide_time[i] == '\0' )
             break;
-	lastheard_putch(wide_time[i]);
+        if ( log == 'l' ) {
+                lastheard_putch(wide_time[i]);
+        } else if ( log == 'c' ) {
+                clog_putch(wide_time[i]);
+        } else if ( log == 's' ) {
+                slog_putch(wide_time[i]);
+        }
     }
 }
 
 // deprecated, left for other versions.
 void print_ant_sym_hook(char *bmp, int x, int y)
 {
+# if (CONFIG_APP_MENU)
+    if( Menu_IsVisible() )  // If the 'app menu' is visible,
+     { return; // then don't allow Tytera's "gfx" to spoil the framebuffer
+     }
+# endif
+
     if( is_netmon_visible() ) {
         return ;
     }
 #ifdef CONFIG_GRAPHICS
     gfx_drawbmp(bmp, x, y);
     draw_eye_opt();
+        //if ( global_addl_config.userscsv > 1 && talkerAlias.length > 0 )                              // 2017-02-19 show talker alias if option selected and rcvd valid alias
+        //      {
+        //      draw_rx_screen(0xff8032);                                                               // 2017-02-18 redraw userinfo when valid talker alias rcvd
+        //      }
 #endif
 }
 
@@ -224,7 +270,13 @@ void gfx_blockfill_hook(int x_from, int y_from, int x_to, int y_to)
     
 //    PRINTRET();
 //    PRINT( "bf: %d %d %d %d\n", x_from, y_from, x_to, y_to );
-    
+  
+# if (CONFIG_APP_MENU)
+   if( Menu_IsVisible() )  // If the 'app menu' is visible,
+    { return; // then don't allow Tytera's "gfx" to spoil the framebuffer
+    }
+# endif
+  
     if( y_from == 0 && x_from == 61 ) {
         con_redraw();
     }
@@ -249,6 +301,12 @@ void gfx_drawbmp_hook( void *bmp, int x, int y )
 //    PRINTRET();
 //    PRINT( "db: %d %d\n", x, y );
     
+# if (CONFIG_APP_MENU)
+   if( Menu_IsVisible() )  // If the 'app menu' is visible,
+    { return; // don't allow Tytera's "gfx" to spoil the framebuffer
+    }
+# endif
+
     // supress bmp drawing in console mode.
     if( is_netmon_visible() ) {
         if( x == D_ICON_ANT_X && y == D_ICON_ANT_Y ) {
@@ -267,6 +325,12 @@ void gfx_drawbmp_hook( void *bmp, int x, int y )
 // r0 = str, r1 = x, r2 = y, r3 = xlen
 void gfx_drawtext2_hook(wchar_t *str, int x, int y, int xlen)
 {
+# if (CONFIG_APP_MENU)
+   if( Menu_IsVisible() )  // If the 'app menu' is visible,
+    { return; // don't allow Tytera's "gfx" to spoil the framebuffer
+    }
+# endif
+
     // filter datetime (y=96)
     if( y != D_DATETIME_Y ) {
 //        PRINTRET();
@@ -285,6 +349,12 @@ void gfx_drawtext4_hook(wchar_t *str, int x, int y, int xlen, int ylen)
 //    PRINTRET();
 //    PRINT("dt4: %d %d %d %d %S (%x)\n", x, y, xlen, ylen, str, str);
     
+# if (CONFIG_APP_MENU)
+   if( Menu_IsVisible() )  // If the 'app menu' is visible,
+    { return; // then don't allow Tytera's "gfx" to spoil the framebuffer
+    }
+# endif
+
     if( is_netmon_visible() ) {
         // channel name
         if( x == D_TEXT_CHANNAME_X && y == D_TEXT_CHANNAME_Y ) {
@@ -307,6 +377,14 @@ extern void gfx_drawchar_pos( int r0, int r1, int r2 );
 
 void gfx_drawchar_pos_hook( int r0, int r1, int r2 )
 {
+
+# if (CONFIG_APP_MENU)
+   if( Menu_IsVisible() )  // If the 'app menu' is visible,
+    { return; // don't allow Tytera's "gfx" to spoil the framebuffer
+      // (must get rid of all this crazy hooking one fine day)
+    }
+# endif
+
     if( is_netmon_visible() ) {
         return ;
     }

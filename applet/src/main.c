@@ -3,11 +3,15 @@
   
 */
 
+#define COMPILING_MAIN_C 1  // flag to show warnings in headers only ONCE
+                   // (e.g. "please consider finding symbols.." in gfx.h)
 
 #include "stm32f4_discovery.h"
 #include "stm32f4xx_conf.h" // again, added because ST didn't put it here ?
 
 #include <string.h>
+
+#include "config.h"  // need to know CONFIG_DIMMED_LIGHT (defined in config.h since 2017-01-03)
 
 #include "md380.h"
 #include "printf.h"
@@ -23,6 +27,10 @@
 #include "util.h"
 #include "spiflash.h"
 
+#include "irq_handlers.h" // Initially written by DL4YHF as a 'playground' with various interrupt handlers .
+                          // Details in applet/src/irq_handlers.c . 
+
+						  
 GPIO_InitTypeDef  GPIO_InitStructure;
 
 void Delay(__IO uint32_t nCount);
@@ -136,6 +144,7 @@ void boot_splash_set_bottomline(void)
 
 void splash_hook_handler(void)
 {
+  
     if( global_addl_config.boot_demo == 0 ) {
         demo();
     }
@@ -162,6 +171,7 @@ void splash_hook_handler(void)
    initialized in the stock firmware.
 */
 int main(void) {
+
   dmesg_init();
   
   /*
